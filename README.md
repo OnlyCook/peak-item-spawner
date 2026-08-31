@@ -22,7 +22,7 @@ A from-scratch rewrite of [**ItemSpawner**](https://thunderstore.io/c/peak/p/qua
 
 ## For players
 
-- Available on [Nexus Mods](https://www.nexusmods.com/games/peak/mods/221/).
+- Available on [Nexus Mods](https://www.nexusmods.com/peak/mods/221/).
 
 ## For developers
 

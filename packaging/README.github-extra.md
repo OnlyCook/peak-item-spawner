@@ -4,7 +4,7 @@
 
 ## For players
 
-- Available on [Nexus Mods](https://www.nexusmods.com/games/peak/mods/221/).
+- Available on [Nexus Mods](https://www.nexusmods.com/peak/mods/221/).
 
 ## For developers
 
