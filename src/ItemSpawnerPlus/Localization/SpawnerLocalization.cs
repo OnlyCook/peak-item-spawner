@@ -17,6 +17,12 @@ namespace ItemSpawnerPlus
         FilterSpecial,
         FilterFood,
         FilterEquipment,
+        FilterCreatures,
+        CreatureBees,
+        CreatureBeetle,
+        CreatureBigGhost,
+        CreatureScoutmasterMyres,
+        CreatureZombie,
         CookTitle,
         CookUncooked,
         CookCooked,
@@ -119,6 +125,37 @@ namespace ItemSpawnerPlus
             {
                 "Equipment", "Équipement", "Equipaggiamento", "Ausrüstung", "Equipo", "Equipo", "Equipamento",
                 "Снаряжение", "Спорядження", "装备", "裝備", "装備", "장비", "Ekwipunek", "Ekipman",
+            },
+            [SpawnerText.FilterCreatures] = new[]
+            {
+                "Creatures", "Créatures", "Creature", "Kreaturen", "Criaturas", "Criaturas", "Criaturas",
+                "Существа", "Істоти", "生物", "生物", "クリーチャー", "생물", "Stwory", "Yaratıklar",
+            },
+            [SpawnerText.CreatureBees] = new[]
+            {
+                "Bees", "Abeilles", "Api", "Bienen", "Abejas", "Abejas", "Abelhas",
+                "Пчёлы", "Бджоли", "蜜蜂", "蜜蜂", "ハチ", "벌", "Pszczoły", "Arılar",
+            },
+            [SpawnerText.CreatureBeetle] = new[]
+            {
+                "Beetle", "Scarabée", "Scarabeo", "Käfer", "Escarabajo", "Escarabajo", "Besouro",
+                "Жук", "Жук", "甲虫", "甲蟲", "カブトムシ", "딱정벌레", "Żuk", "Böcek",
+            },
+            [SpawnerText.CreatureBigGhost] = new[]
+            {
+                "Big Ghost", "Grand Fantôme", "Fantasma gigante", "Großer Geist", "Fantasma grande",
+                "Fantasma grande", "Fantasma grande", "Большой призрак", "Великий привид", "大幽灵",
+                "大幽靈", "大きな幽霊", "큰 유령", "Wielki duch", "Büyük Hayalet",
+            },
+            // proper name of the boss / area, kept as-is in every language
+            [SpawnerText.CreatureScoutmasterMyres] = new[]
+            {
+                "Scoutmaster Myres", "", "", "", "", "", "", "", "", "", "", "", "", "", "",
+            },
+            [SpawnerText.CreatureZombie] = new[]
+            {
+                "Zombie", "Zombie", "Zombie", "Zombie", "Zombi", "Zombi", "Zumbi",
+                "Зомби", "Зомбі", "僵尸", "殭屍", "ゾンビ", "좀비", "Zombie", "Zombi",
             },
             [SpawnerText.CookTitle] = new[]
             {

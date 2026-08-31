@@ -4,7 +4,8 @@ using UnityEngine;
 
 namespace ItemSpawnerPlus
 {
-    internal enum ItemClass { Vanilla, Modded, Special }
+    // Creature shares the per-row class slot so the filter/colour code needs no branch
+    internal enum ItemClass { Vanilla, Modded, Special, Creature }
 
     [System.Flags]
     internal enum ItemCategory { None = 0, Food = 1, Equipment = 2 }
@@ -62,6 +63,36 @@ namespace ItemSpawnerPlus
             "Rocketpack", "RopeShooter", "RopeShooterAnti", "RopeSpool", "ScoutCannonItem",
             "ScoutEffigy", "ScoutsHonor", "ShelfShroom", "Sunscreen", "Torch",
         };
+
+        // items that detonate the instant they reach cook level 1 (tested in-game)
+        private static readonly HashSet<string> ExplodeOnCook = new HashSet<string>(StringComparer.Ordinal)
+        {
+            "AntiZooka", "Antidote", "Balloon", "BalloonBunch", "Basketball", "Cure-All",
+            "Cursed Skull", "Dynamite", "Lantern_Faerie", "Flare", "Heat Pack", "Lantern",
+            "PandorasBox", "PortableStovetopItem", "ScoutCannonItem", "Sunscreen",
+        };
+
+        // 0 = never, else the cook level at which spawning detonates it; tested list
+        // first, then a CookingBehavior_Explode scan for anything it misses
+        internal static int ExplodeCookLevel(Item item)
+        {
+            try
+            {
+                if (ExplodeOnCook.Contains(item.gameObject.name)) return 1;
+
+                var cooking = item.GetComponentInChildren<ItemCooking>(true);
+                var behaviors = cooking != null ? cooking.additionalCookingBehaviors : null;
+                if (behaviors != null)
+                {
+                    int min = int.MaxValue;
+                    foreach (var b in behaviors)
+                        if (b is CookingBehavior_Explode) min = Math.Min(min, Math.Max(1, b.cookedAmountToTrigger));
+                    if (min != int.MaxValue) return min;
+                }
+            }
+            catch { }
+            return 0;
+        }
 
         internal static ItemCategory CategoriesOf(Item item)
         {

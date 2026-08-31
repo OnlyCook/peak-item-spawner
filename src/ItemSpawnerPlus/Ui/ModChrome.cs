@@ -22,13 +22,15 @@ namespace ItemSpawnerPlus
         internal static readonly Color TileHoverColor = new Color(0.70f, 0.53f, 0.17f, 0.72f);
         internal static readonly Color TilePressColor = new Color(0.84f, 0.64f, 0.22f, 0.90f);
         // per-class tile fills: vanilla keeps the plain inset, modded reads purple,
-        // not-normally-available reads teal
+        // not-normally-available reads teal, creatures read blood red
         internal static readonly Color TileModdedColor = new Color(0.40f, 0.13f, 0.58f, 0.70f);
         internal static readonly Color TileSpecialColor = new Color(0.06f, 0.42f, 0.44f, 0.68f);
+        internal static readonly Color TileCreatureColor = new Color(0.66f, 0.13f, 0.24f, 0.72f);
 
         internal static Color TileColorFor(ItemClass c) =>
             c == ItemClass.Modded ? TileModdedColor
             : c == ItemClass.Special ? TileSpecialColor
+            : c == ItemClass.Creature ? TileCreatureColor
             : PanelInsetColor;
         internal static readonly Color KeyChipFillColor = new Color(0.10f, 0.16f, 0.44f);
         internal static readonly Color KeyTextColor = new Color(1f, 0.95f, 0.72f);
@@ -281,14 +283,34 @@ namespace ItemSpawnerPlus
             return (pa - ba * h).magnitude;
         }
 
-        private static Sprite _flameSprite, _filterSprite, _clearSprite;
+        private static Sprite _flameSprite, _filterSprite, _clearSprite, _errGlyph, _warnGlyph, _errChip, _warnChip;
 
         // Material Symbols icons, shipped as embedded white-on-transparent PNGs
         internal static Sprite FlameSprite() => _flameSprite ??= LoadEmbeddedSprite("ItemSpawnerPlus.flame.png");
         internal static Sprite FilterSprite() => _filterSprite ??= LoadEmbeddedSprite("ItemSpawnerPlus.filter.png");
         internal static Sprite ClearSprite() => _clearSprite ??= LoadEmbeddedSprite("ItemSpawnerPlus.clear.png");
 
+        // corner badges: near-black chip, coloured ring + glyph (error red, warning orange)
+        private static readonly Color BadgeChipFill = new Color(0.09f, 0.08f, 0.04f, 0.97f);
+        internal static readonly Color ErrorGlyphColor = new Color(0.93f, 0.13f, 0.14f);
+        internal static readonly Color ExplodeGlyphColor = new Color(1f, 0.56f, 0.05f);
+        internal static Sprite ErrorGlyphSprite() => _errGlyph ??= LoadEmbeddedSprite("ItemSpawnerPlus.warn-error.png");
+        internal static Sprite ExplodeGlyphSprite() => _warnGlyph ??= LoadEmbeddedSprite("ItemSpawnerPlus.warn-explode.png");
+        internal static Sprite ErrorChipSprite() => _errChip ??=
+            MakeRoundedSprite(36, 18f, 2.4f, BadgeChipFill, new Color(0.90f, 0.11f, 0.13f, 0.96f));
+        internal static Sprite ExplodeChipSprite() => _warnChip ??=
+            MakeRoundedSprite(36, 18f, 2.2f, BadgeChipFill, new Color(0.98f, 0.62f, 0.08f, 0.95f));
+
         private static Sprite LoadEmbeddedSprite(string resource)
+        {
+            var tex = LoadEmbeddedTexture(resource);
+            return tex != null
+                ? Sprite.Create(tex, new Rect(0, 0, tex.width, tex.height), new Vector2(0.5f, 0.5f), 100f)
+                : null;
+        }
+
+        // LoadImage handles PNG/JPG only, no webp
+        internal static Texture2D LoadEmbeddedTexture(string resource)
         {
             try
             {
@@ -304,8 +326,7 @@ namespace ItemSpawnerPlus
                     read += n;
                 }
                 var tex = new Texture2D(2, 2, TextureFormat.RGBA32, false) { filterMode = FilterMode.Bilinear };
-                if (tex.LoadImage(buf))
-                    return Sprite.Create(tex, new Rect(0, 0, tex.width, tex.height), new Vector2(0.5f, 0.5f), 100f);
+                if (tex.LoadImage(buf)) return tex;
             }
             catch { }
             return null;

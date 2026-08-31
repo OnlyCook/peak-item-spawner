@@ -36,6 +36,10 @@
     <EmbeddedResource Include="Assets/flame.png" LogicalName="ItemSpawnerPlus.flame.png" />
     <EmbeddedResource Include="Assets/filter.png" LogicalName="ItemSpawnerPlus.filter.png" />
     <EmbeddedResource Include="Assets/clear.png" LogicalName="ItemSpawnerPlus.clear.png" />
+    <EmbeddedResource Include="Assets/warn-error.png" LogicalName="ItemSpawnerPlus.warn-error.png" />
+    <EmbeddedResource Include="Assets/warn-explode.png" LogicalName="ItemSpawnerPlus.warn-explode.png" />
+    <!-- creature icons: LogicalName = ItemSpawnerPlus.creature.<file-stem>.png -->
+    <EmbeddedResource Include="Assets/creatures/*.png" LogicalName="ItemSpawnerPlus.creature.%(Filename).png" />
   </ItemGroup>
 
   <!-- BepInEx + Harmony -->

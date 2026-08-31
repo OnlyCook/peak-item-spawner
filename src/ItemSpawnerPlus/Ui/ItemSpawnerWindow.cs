@@ -63,21 +63,28 @@ namespace ItemSpawnerPlus
         private int _lastPanelW, _lastPanelH;
 
         private readonly List<Item> _items = new List<Item>();
+        private readonly List<CreatureDef> _creatures = new List<CreatureDef>();
         private readonly List<GameObject> _tiles = new List<GameObject>();
+
+        // items and creatures share one sorted grid; the _tile* arrays are this long
+        private int RowCount => _items.Count + _creatures.Count;
         private readonly List<string> _tileSearchNames = new List<string>();
         private readonly List<ItemClass> _tileClass = new List<ItemClass>();
         private readonly List<ItemCategory> _tileCategory = new List<ItemCategory>();
+        // 0 = never, N = this item detonates on spawn once the cook level reaches N
+        private readonly List<int> _tileExplodeAt = new List<int>();
 
-        private enum FilterKey { Vanilla, Modded, Special, Food, Equipment }
+        private enum FilterKey { Vanilla, Modded, Special, Food, Equipment, Creature }
 
         private RectTransform _filterBtnRect;
         private GameObject _filterMenu;
         private RectTransform _filterMenuRect;
         private bool _filterOpen;
+        // not persisted; Creature is re-seeded from config in Init
         private readonly Dictionary<FilterKey, bool> _filterState = new()
         {
             [FilterKey.Vanilla] = true, [FilterKey.Modded] = true, [FilterKey.Special] = true,
-            [FilterKey.Food] = true, [FilterKey.Equipment] = true,
+            [FilterKey.Food] = true, [FilterKey.Equipment] = true, [FilterKey.Creature] = false,
         };
         private readonly Dictionary<FilterKey, (Image box, Image tick, TextMeshProUGUI label)> _filterRows = new();
 
@@ -131,6 +138,7 @@ namespace ItemSpawnerPlus
         {
             _log = log;
             _cfg = cfg;
+            _filterState[FilterKey.Creature] = cfg != null && cfg.IncludeCreaturesByDefault.Value;
         }
 
         private void Awake()
@@ -217,6 +225,7 @@ namespace ItemSpawnerPlus
             }
 
             RefreshFooter(); // after activation so its layout rebuild takes effect
+            RefreshTileIndicators(); // scene may have changed since the build
             LayoutPanel();
             RelayoutTiles(restoreScroll: true);
             StartCoroutine(RelayoutNextFrame());
@@ -765,14 +774,24 @@ namespace ItemSpawnerPlus
         private const float FilterMenuPad = 10f;
         private const float FilterSectionGap = 12f;
 
-        private static readonly (FilterKey key, SpawnerText label)[] _filterDefs =
+        // a gap is drawn between rows whose section id differs
+        private static readonly (FilterKey key, SpawnerText label, int section)[] _filterDefs =
         {
-            (FilterKey.Vanilla, SpawnerText.FilterVanilla),
-            (FilterKey.Modded, SpawnerText.FilterModded),
-            (FilterKey.Special, SpawnerText.FilterSpecial),
-            (FilterKey.Food, SpawnerText.FilterFood),
-            (FilterKey.Equipment, SpawnerText.FilterEquipment),
+            (FilterKey.Vanilla, SpawnerText.FilterVanilla, 0),
+            (FilterKey.Modded, SpawnerText.FilterModded, 0),
+            (FilterKey.Special, SpawnerText.FilterSpecial, 0),
+            (FilterKey.Food, SpawnerText.FilterFood, 1),
+            (FilterKey.Equipment, SpawnerText.FilterEquipment, 1),
+            (FilterKey.Creature, SpawnerText.FilterCreatures, 2),
         };
+
+        private static int FilterSectionCount()
+        {
+            int n = 1;
+            for (int i = 1; i < _filterDefs.Length; i++)
+                if (_filterDefs[i].section != _filterDefs[i - 1].section) n++;
+            return n;
+        }
 
         private void BuildFilterMenu(Transform panel)
         {
@@ -781,7 +800,7 @@ namespace ItemSpawnerPlus
             _filterMenuRect = (RectTransform)_filterMenu.transform;
             _filterMenuRect.anchorMin = _filterMenuRect.anchorMax = new Vector2(1f, 1f);
             _filterMenuRect.pivot = new Vector2(1f, 1f);
-            float h = FilterMenuPad * 2f + _filterDefs.Length * FilterRowH + FilterSectionGap;
+            float h = FilterMenuPad * 2f + _filterDefs.Length * FilterRowH + (FilterSectionCount() - 1) * FilterSectionGap;
             _filterMenuRect.sizeDelta = new Vector2(FilterMenuW, h);
             _filterMenuRect.anchoredPosition = new Vector2(-GridSide, -(Margin + TitleHeight + Margin + SearchHeight + 6f));
 
@@ -791,10 +810,11 @@ namespace ItemSpawnerPlus
             bg.color = new Color(ModChrome.PanelBorderColor.r, ModChrome.PanelBorderColor.g, ModChrome.PanelBorderColor.b, 0.98f);
 
             _filterRows.Clear();
+            int gaps = 0;
             for (int i = 0; i < _filterDefs.Length; i++)
             {
-                // the class facet (first 3) and the category facet (last 3) sit apart
-                float y = FilterMenuPad + i * FilterRowH + (i >= 3 ? FilterSectionGap : 0f);
+                if (i > 0 && _filterDefs[i].section != _filterDefs[i - 1].section) gaps++;
+                float y = FilterMenuPad + i * FilterRowH + gaps * FilterSectionGap;
                 BuildFilterRow(_filterDefs[i].key, _filterDefs[i].label, y);
             }
 
@@ -863,7 +883,8 @@ namespace ItemSpawnerPlus
         private bool ClassAllowed(ItemClass c)
         {
             var k = c == ItemClass.Modded ? FilterKey.Modded
-                : c == ItemClass.Special ? FilterKey.Special : FilterKey.Vanilla;
+                : c == ItemClass.Special ? FilterKey.Special
+                : c == ItemClass.Creature ? FilterKey.Creature : FilterKey.Vanilla;
             return _filterState[k];
         }
 
@@ -1072,9 +1093,11 @@ namespace ItemSpawnerPlus
             int lvl = Mathf.Clamp(Mathf.RoundToInt(v), 0, CookMax);
             // levels 3+ all render identically (Burnt/Incinerated), skip the icon repaint
             bool visualChange = ClampVisual(lvl) != ClampVisual(_cookLevel);
+            int prev = _cookLevel;
             _cookLevel = lvl;
             UpdateCookLabels();
             if (visualChange) ApplyCookTint();
+            if (lvl != prev) RefreshTileIndicators();
         }
 
         private static int ClampVisual(int level) => level > 3 ? 3 : level;
@@ -1090,6 +1113,7 @@ namespace ItemSpawnerPlus
             var c = CookColor(_cookLevel);
             for (int i = 0; i < _tiles.Count; i++)
             {
+                if (i < _tileClass.Count && _tileClass[i] == ItemClass.Creature) continue; // no cook tint on creatures
                 var icon = _tiles[i] != null ? _tiles[i].GetComponentInChildren<RawImage>(true) : null;
                 if (icon != null) icon.color = c;
             }
@@ -1106,7 +1130,7 @@ namespace ItemSpawnerPlus
         private void LayoutPanel()
         {
             if (_panelRect == null) return;
-            int rows = Mathf.Max(1, Mathf.CeilToInt(_items.Count / (float)GridColumns));
+            int rows = Mathf.Max(1, Mathf.CeilToInt(RowCount / (float)GridColumns));
             int visRows = Mathf.Clamp(rows, 1, MaxVisibleRows);
             float bodyH = visRows * CellH + (visRows - 1) * CellSpacing + 2f * GridInset;
             float w = Mathf.Min(PanelWidth, CanvasWidthUnits - 80f) + 2f * ModChrome.PanelOuterMargin;
@@ -1176,27 +1200,56 @@ namespace ItemSpawnerPlus
                     foreach (var item in db.Objects)
                         if (item != null) _items.Add(item);
                 }
-                _items.Sort((a, b) => string.Compare(TileLabel(a), TileLabel(b), StringComparison.OrdinalIgnoreCase));
+                if (_creatures.Count == 0)
+                    _creatures.AddRange(CreatureCatalog.All);
+
+                // merge items + creatures, sorted together by display name
+                var order = new List<(Item item, CreatureDef creature, string key)>(_items.Count + _creatures.Count);
+                foreach (var it in _items) order.Add((it, null, TileLabel(it)));
+                foreach (var cr in _creatures) order.Add((null, cr, cr.LocalizedName()));
+                order.Sort((a, b) => string.Compare(a.key, b.key, StringComparison.OrdinalIgnoreCase));
 
                 _tileSearchNames.Clear();
                 _tileClass.Clear();
                 _tileCategory.Clear();
-                for (int i = 0; i < _items.Count; i++)
+                _tileExplodeAt.Clear();
+                for (int i = 0; i < order.Count; i++)
                 {
-                    var item = _items[i];
-                    if (i < _tiles.Count) UpdateTile(_tiles[i], item);
-                    else _tiles.Add(BuildTile(item));
-                    _tileSearchNames.Add(SearchBlob(item));
-                    _tileClass.Add(ItemClassifier.Classify(item));
-                    _tileCategory.Add(ItemClassifier.CategoriesOf(item));
+                    var (item, def, _) = order[i];
+
+                    GameObject tile;
+                    if (i < _tiles.Count) tile = _tiles[i];
+                    else { tile = BuildTileGo(); _tiles.Add(tile); }
+
+                    if (def != null)
+                    {
+                        UpdateCreatureTile(tile, def);
+                        _tileSearchNames.Add(CreatureSearchBlob(def));
+                        _tileClass.Add(ItemClass.Creature);
+                        _tileCategory.Add(ItemCategory.None);
+                        _tileExplodeAt.Add(0);
+                    }
+                    else
+                    {
+                        UpdateTile(tile, item);
+                        _tileSearchNames.Add(SearchBlob(item));
+                        _tileClass.Add(ItemClassifier.Classify(item));
+                        _tileCategory.Add(ItemClassifier.CategoriesOf(item));
+                        _tileExplodeAt.Add(ItemClassifier.ExplodeCookLevel(item));
+                    }
                 }
-                for (int i = _items.Count; i < _tiles.Count; i++)
+                for (int i = order.Count; i < _tiles.Count; i++)
                     _tiles[i].SetActive(false);
 
                 _emptyText.text = SpawnerLocalization.Get(SpawnerText.NoItems);
-                _emptyText.gameObject.SetActive(_items.Count == 0);
+                _emptyText.gameObject.SetActive(RowCount == 0);
 
-                _log?.LogInfo($"Item Spawner Plus: listed {_items.Count} spawnable item(s).");
+                RefreshTileIndicators();
+
+                // apply filters now so creatures (off by default) start hidden
+                OnSearchChanged(_searchInput != null ? _searchInput.text : string.Empty);
+
+                _log?.LogInfo($"Item Spawner Plus: listed {_items.Count} item(s) + {_creatures.Count} creature(s).");
             }
             catch (Exception e)
             {
@@ -1250,6 +1303,16 @@ namespace ItemSpawnerPlus
             return sb.ToString().ToLowerInvariant();
         }
 
+        // localized name + English label + prefab name, same normalization as items
+        private static string CreatureSearchBlob(CreatureDef def)
+        {
+            string loc = def.LocalizedName();
+            var sb = new System.Text.StringBuilder(64);
+            sb.Append(Squash(loc)).Append('\n').Append(Squash(def.Label)).Append('\n').Append(Squash(def.PrefabName));
+            PinyinIndex.Append(loc, sb);
+            return sb.ToString().ToLowerInvariant();
+        }
+
         // normalises both the query and the search blob so matching ignores case
         // (caller lowercases), whitespace, hyphens/dashes, apostrophes and diacritics:
         // "cure all" / "cure-all" -> "cureall"; "grune"/"grüne" -> "grune";
@@ -1280,7 +1343,7 @@ namespace ItemSpawnerPlus
             catch { try { return item.UIData != null ? item.UIData.icon : null; } catch { return null; } }
         }
 
-        private GameObject BuildTile(Item item)
+        private GameObject BuildTileGo()
         {
             var tileGo = new GameObject("Tile", typeof(RectTransform));
             tileGo.transform.SetParent(_gridContent, false);
@@ -1335,8 +1398,73 @@ namespace ItemSpawnerPlus
             labelRect.offsetMin = new Vector2(6f, 8f);
             labelRect.offsetMax = new Vector2(-6f, 52f);
 
-            UpdateTile(tileGo, item);
+            var badgeGo = new GameObject("Badge", typeof(RectTransform));
+            badgeGo.transform.SetParent(tileGo.transform, false);
+            var badgeImg = badgeGo.AddComponent<Image>();
+            badgeImg.type = Image.Type.Simple;
+            badgeImg.raycastTarget = false;
+            var badgeRt = (RectTransform)badgeGo.transform;
+            badgeRt.anchorMin = badgeRt.anchorMax = new Vector2(1f, 1f);
+            badgeRt.pivot = new Vector2(1f, 1f);
+            badgeRt.sizeDelta = new Vector2(24f, 24f);
+            badgeRt.anchoredPosition = new Vector2(-5f, -5f);
+
+            var glyphGo = new GameObject("Glyph", typeof(RectTransform));
+            glyphGo.transform.SetParent(badgeGo.transform, false);
+            var glyphImg = glyphGo.AddComponent<Image>();
+            glyphImg.type = Image.Type.Simple;
+            glyphImg.raycastTarget = false;
+            var glyphRt = (RectTransform)glyphGo.transform;
+            glyphRt.anchorMin = Vector2.zero;
+            glyphRt.anchorMax = Vector2.one; // real insets set per kind in SetTileIndicator
+
+            badgeGo.SetActive(false);
+
             return tileGo;
+        }
+
+        private enum IndicatorKind { None, Error, Warn }
+
+        private static void SetTileIndicator(GameObject tileGo, IndicatorKind kind)
+        {
+            var badge = tileGo.transform.Find("Badge");
+            if (badge == null) return;
+            if (kind == IndicatorKind.None) { badge.gameObject.SetActive(false); return; }
+
+            var chip = badge.GetComponent<Image>();
+            var glyphRt = badge.Find("Glyph") as RectTransform;
+            var glyph = glyphRt != null ? glyphRt.GetComponent<Image>() : null;
+            if (kind == IndicatorKind.Error)
+            {
+                if (chip != null) { chip.sprite = ModChrome.ErrorChipSprite(); chip.color = Color.white; }
+                if (glyph != null) { glyph.sprite = ModChrome.ErrorGlyphSprite(); glyph.color = ModChrome.ErrorGlyphColor; }
+                if (glyphRt != null) { glyphRt.offsetMin = new Vector2(4f, 4f); glyphRt.offsetMax = new Vector2(-4f, -4f); }
+            }
+            else // Warn
+            {
+                if (chip != null) { chip.sprite = ModChrome.ExplodeChipSprite(); chip.color = Color.white; }
+                if (glyph != null) { glyph.sprite = ModChrome.ExplodeGlyphSprite(); glyph.color = ModChrome.ExplodeGlyphColor; }
+                // triangle is bottom-heavy, nudge it up 1px
+                if (glyphRt != null) { glyphRt.offsetMin = new Vector2(3f, 4.5f); glyphRt.offsetMax = new Vector2(-3f, -2.5f); }
+            }
+            badge.gameObject.SetActive(true);
+        }
+
+        // error badge = creatures blocked here, warning badge = item detonates at this cook level
+        private void RefreshTileIndicators()
+        {
+            bool creaturesBlocked = !CreatureCatalog.InGameplayScene();
+            for (int i = 0; i < _tiles.Count && i < _tileClass.Count; i++)
+            {
+                if (_tiles[i] == null) continue;
+                IndicatorKind kind;
+                if (_tileClass[i] == ItemClass.Creature)
+                    kind = creaturesBlocked ? IndicatorKind.Error : IndicatorKind.None;
+                else
+                    kind = (i < _tileExplodeAt.Count && _tileExplodeAt[i] > 0 && _cookLevel >= _tileExplodeAt[i])
+                        ? IndicatorKind.Warn : IndicatorKind.None;
+                SetTileIndicator(_tiles[i], kind);
+            }
         }
 
         private void UpdateTile(GameObject tileGo, Item item)
@@ -1354,7 +1482,13 @@ namespace ItemSpawnerPlus
             }
 
             var label = tileGo.GetComponentInChildren<TextMeshProUGUI>(true);
-            if (label != null) label.text = TileLabel(item);
+            if (label != null)
+            {
+                label.text = TileLabel(item);
+                var lr = (RectTransform)label.transform;
+                lr.anchorMax = new Vector2(1f, 0f); // sits below the icon
+                lr.offsetMax = new Vector2(-6f, 52f);
+            }
 
             var baseColor = ModChrome.TileColorFor(ItemClassifier.Classify(item));
             var bg = tileGo.GetComponent<Image>();
@@ -1368,12 +1502,48 @@ namespace ItemSpawnerPlus
             btn.onClick.AddListener(() => Spawn(captured));
         }
 
+        private void UpdateCreatureTile(GameObject tileGo, CreatureDef def)
+        {
+            tileGo.SetActive(true);
+            tileGo.name = "Tile_Creature_" + def.PrefabName;
+
+            var tex = CreatureCatalog.GetIcon(def);
+            var icon = tileGo.GetComponentInChildren<RawImage>(true);
+            if (icon != null)
+            {
+                icon.texture = tex;
+                icon.enabled = tex != null;
+                icon.color = Color.white; // no cook tint on creatures
+            }
+
+            var label = tileGo.GetComponentInChildren<TextMeshProUGUI>(true);
+            if (label != null)
+            {
+                label.text = def.LocalizedName();
+                var lr = (RectTransform)label.transform;
+                // icon present: label below it; absent: label fills the tile
+                lr.anchorMax = new Vector2(1f, tex != null ? 0f : 1f);
+                lr.offsetMax = new Vector2(-6f, tex != null ? 52f : -12f);
+            }
+
+            var baseColor = ModChrome.TileColorFor(ItemClass.Creature);
+            var bg = tileGo.GetComponent<Image>();
+            if (bg != null) bg.color = baseColor;
+            var hover = tileGo.GetComponent<TileHover>();
+            if (hover != null) { hover.Normal = baseColor; hover.Apply(); }
+
+            var btn = tileGo.GetComponent<Button>();
+            btn.onClick.RemoveAllListeners();
+            var captured = def;
+            btn.onClick.AddListener(() => SpawnCreature(captured));
+        }
+
         private void OnSearchChanged(string raw)
         {
             if (_clearBtn != null) _clearBtn.SetActive(!string.IsNullOrEmpty(raw));
             string q = Squash(raw ?? string.Empty).ToLowerInvariant();
             int shown = 0;
-            for (int i = 0; i < _items.Count && i < _tiles.Count; i++)
+            for (int i = 0; i < RowCount && i < _tiles.Count; i++)
             {
                 bool classOk = i >= _tileClass.Count || ClassAllowed(_tileClass[i]);
                 bool catOk = i >= _tileCategory.Count || CategoryAllowed(_tileCategory[i]);
@@ -1384,8 +1554,8 @@ namespace ItemSpawnerPlus
             }
             if (_emptyText != null)
             {
-                _emptyText.gameObject.SetActive(_items.Count == 0 || shown == 0);
-                _emptyText.text = SpawnerLocalization.Get(_items.Count == 0 ? SpawnerText.NoItems : SpawnerText.NoMatches);
+                _emptyText.gameObject.SetActive(RowCount == 0 || shown == 0);
+                _emptyText.text = SpawnerLocalization.Get(RowCount == 0 ? SpawnerText.NoItems : SpawnerText.NoMatches);
             }
             RelayoutTiles();
         }
@@ -1419,6 +1589,57 @@ namespace ItemSpawnerPlus
             catch (Exception e)
             {
                 _log?.LogError($"ItemSpawnerWindow.Spawn failed: {e}");
+            }
+        }
+
+        private void SpawnCreature(CreatureDef def)
+        {
+            try
+            {
+                var local = Character.localCharacter;
+                if (!PhotonNetwork.IsConnected || !PhotonNetwork.InRoom || local == null)
+                {
+                    _log?.LogInfo("Item Spawner Plus: creature spawn ignored, not in an active run.");
+                    return;
+                }
+                // spawning creatures in the Airport corrupts the next run's start (see CreatureCatalog)
+                if (!CreatureCatalog.InGameplayScene())
+                {
+                    _log?.LogInfo($"Item Spawner Plus: {def.Label} not spawned - creatures can only be spawned during a run, not in the lobby.");
+                    return;
+                }
+                if (def.RoomObject && !PhotonNetwork.IsMasterClient)
+                {
+                    _log?.LogInfo($"Item Spawner Plus: {def.Label} can only be spawned by the host.");
+                    return;
+                }
+
+                var prefab = CreatureCatalog.Resolve(def, out string key, out string how);
+                if (prefab == null || string.IsNullOrEmpty(key))
+                {
+                    _log?.LogWarning($"Item Spawner Plus: could not resolve a prefab for {def.Label} (not loaded yet?).");
+                    return;
+                }
+
+                if (def.NeedsMobManager) CreatureCatalog.EnsureMobManager();
+
+                Vector3 flat = local.data != null ? local.data.lookDirection_Flat : Vector3.zero;
+                if (flat == Vector3.zero) flat = local.transform.forward;
+                flat = flat.normalized;
+
+                Vector3 origin = local.Center + flat * def.SpawnDistance + Vector3.up;
+                var hit = HelperFunctions.LineCheck(origin + Vector3.up * 3f, origin - Vector3.up * 14f,
+                    HelperFunctions.LayerType.TerrainMap);
+                Vector3 pos = hit.transform ? hit.point + Vector3.up * 0.5f : origin;
+                Quaternion rot = Quaternion.LookRotation(-flat, Vector3.up);
+
+                if (def.RoomObject) PhotonNetwork.InstantiateRoomObject(key, pos, rot, 0);
+                else PhotonNetwork.Instantiate(key, pos, rot, 0);
+                _log?.LogInfo($"Item Spawner Plus: spawned creature {def.Label} via {how}.");
+            }
+            catch (Exception e)
+            {
+                _log?.LogError($"ItemSpawnerWindow.SpawnCreature failed: {e}");
             }
         }
 
