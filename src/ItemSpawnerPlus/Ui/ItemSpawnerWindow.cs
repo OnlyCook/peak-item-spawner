@@ -19,11 +19,14 @@ namespace ItemSpawnerPlus
     {
         public override bool openOnStart => false;
         public override bool selectOnOpen => false;
-        public override bool closeOnPause => true;
-        public override bool closeOnUICancel => true;
+        public override bool closeOnPause => !SwallowToggleKey;
+        public override bool closeOnUICancel => !SwallowToggleKey;
         public override GameObject panel => _root;
 
         public bool MenuOpen { get; private set; }
+
+        // true while (or the frame) a rebind eats a key press, so it neither toggles nor closes the menu
+        public bool SwallowToggleKey => _capturingKey || Time.frameCount - _keyCapturedFrame <= SwallowFrames;
 
         private ManualLogSource _log;
         private PluginConfig _cfg;
@@ -97,6 +100,25 @@ namespace ItemSpawnerPlus
         private TextMeshProUGUI _cookNameLabel;
         private TextMeshProUGUI _cookTitleLabel;
 
+        private RectTransform _targetBtnRect;
+        private Image _targetIcon;
+        private TileHover _targetHover;
+        private GameObject _targetMenu;
+        private RectTransform _targetMenuRect;
+        private TextMeshProUGUI _targetTitleLabel;
+        private bool _targetOpen;
+        // photon actor number of the player items spawn for, -1 = the local player
+        private int _targetActor = -1;
+        private readonly List<GameObject> _targetRows = new List<GameObject>();
+
+        private RectTransform _keyBtnRect;
+        private TileHover _keyHover;
+        private bool _capturingKey;
+        private int _keyCapturedFrame = -100;
+        // the Input System can see a press a frame after legacy Input does
+        private const int SwallowFrames = 3;
+        private static KeyCode[] _allKeys;
+
         private const float ReferenceHeight = 1080f;
         private static float CanvasWidthUnits => (float)Screen.width / Screen.height * ReferenceHeight;
         private const float PanelWidth = 1120f;
@@ -110,6 +132,7 @@ namespace ItemSpawnerPlus
         private const float FooterHeight = 36f;
         private const float FilterBtnSize = 46f;
         private const float FilterGap = 8f;
+        private const int TopButtonCount = 4;
         private const int GridColumns = 6;
         private const int MaxVisibleRows = 4;
         private const float CellH = 172f;
@@ -226,6 +249,7 @@ namespace ItemSpawnerPlus
 
             RefreshFooter(); // after activation so its layout rebuild takes effect
             RefreshTileIndicators(); // scene may have changed since the build
+            RefreshTargetButton(); // players may have joined / left since
             LayoutPanel();
             RelayoutTiles(restoreScroll: true);
             StartCoroutine(RelayoutNextFrame());
@@ -254,8 +278,8 @@ namespace ItemSpawnerPlus
             MenuOpen = false;
             if (_scrollRect != null) _savedScroll = Mathf.Clamp01(_scrollRect.verticalNormalizedPosition);
             _loadingRoot?.SetActive(false);
-            SetFilterMenu(false);
-            SetCookMenu(false);
+            EndKeyCapture();
+            CloseDropdowns();
             // eat the same-frame pause the Escape close would otherwise trigger
             PauseSuppressPatch.SuppressNextOpen();
         }
@@ -272,6 +296,15 @@ namespace ItemSpawnerPlus
 
         protected override void Update()
         {
+            if (_capturingKey) UpdateKeyCapture();
+            else if (MenuOpen && Input.GetKeyDown(KeyCode.Escape))
+            {
+                CloseMenu();
+                PauseSuppressPatch.SuppressNextOpen();
+                return;
+            }
+
+            if (SwallowToggleKey) ConsumeCancelInput();
             base.Update(); // keeps closeOnPause / closeOnUICancel (Esc) working
 
             if (_heavyBuilt)
@@ -296,6 +329,8 @@ namespace ItemSpawnerPlus
                     SetFilterMenu(false);
                 if (_cookOpen && !PointerOver(_cookMenuRect) && !PointerOver(_cookBtnRect))
                     SetCookMenu(false);
+                if (_targetOpen && !PointerOver(_targetMenuRect) && !PointerOver(_targetBtnRect))
+                    SetTargetMenu(false);
             }
 
             if (_dimImage != null && _dimFadeElapsed < DimFadeDuration)
@@ -424,9 +459,9 @@ namespace ItemSpawnerPlus
                 BuildSearch(panelGo.transform);
                 BuildGrid(panelGo.transform);
                 BuildFooter(panelGo.transform);
-                BuildCookButton(panelGo.transform);
-                BuildFilterButton(panelGo.transform);
+                BuildTopButtons(panelGo.transform);
                 BuildCookMenu(panelGo.transform);
+                BuildTargetMenu(panelGo.transform);
                 BuildFilterMenu(panelGo.transform); // last: renders above the grid
 
                 _heavyBuilt = true;
@@ -475,7 +510,7 @@ namespace ItemSpawnerPlus
             bgRect.anchorMax = new Vector2(1f, 1f);
             bgRect.pivot = new Vector2(0.5f, 1f);
             bgRect.offsetMin = new Vector2(GridSide, -(Margin + TitleHeight + Margin + SearchHeight));
-            bgRect.offsetMax = new Vector2(-(GridSide + 2f * (FilterBtnSize + FilterGap)), -(Margin + TitleHeight + Margin));
+            bgRect.offsetMax = new Vector2(-BtnRight(TopButtonCount), -(Margin + TitleHeight + Margin));
 
             var areaGo = new GameObject("TextArea", typeof(RectTransform));
             areaGo.transform.SetParent(bgGo.transform, false);
@@ -699,7 +734,8 @@ namespace ItemSpawnerPlus
             if (_footerKeyText == null) return;
             string key = _cfg != null ? _cfg.ToggleKey.Value.ToString() : "F5";
             _footerKeyText.text = $"{key} / Esc";
-            _footerLabelText.text = SpawnerLocalization.Get(SpawnerText.Close);
+            _footerKeyText.transform.parent.gameObject.SetActive(!_capturingKey);
+            _footerLabelText.text = SpawnerLocalization.Get(_capturingKey ? SpawnerText.RebindPrompt : SpawnerText.Close);
 
             // TMP preferred size is stale until the mesh regenerates, so a rebound key
             // or a re-localized label would not resize the badge/row without this
@@ -721,6 +757,8 @@ namespace ItemSpawnerPlus
                 RefreshFooter();
                 RelocalizeFilterMenu();
                 UpdateCookLabels();
+                if (_targetTitleLabel != null) _targetTitleLabel.text = SpawnerLocalization.Get(SpawnerText.TargetTitle);
+                if (_targetOpen) RebuildTargetRows();
                 RefreshEntries();
                 OnSearchChanged(_searchInput != null ? _searchInput.text : string.Empty);
             }
@@ -730,17 +768,28 @@ namespace ItemSpawnerPlus
             }
         }
 
-        // --- filter button + dropdown ---
+        // --- top-right buttons, slot 0 is the rightmost ---
 
-        private void BuildFilterButton(Transform panel)
+        private static float BtnRight(int slot) => GridSide + slot * (FilterBtnSize + FilterGap);
+
+        private void BuildTopButtons(Transform panel)
         {
-            var go = new GameObject("FilterButton", typeof(RectTransform));
+            _keyBtnRect = BuildTopButton(panel, "KeyButton", 0, ModChrome.KeyboardSprite(), ToggleKeyCapture, out _keyHover, out _);
+            _filterBtnRect = BuildTopButton(panel, "FilterButton", 1, ModChrome.FilterSprite(), ToggleFilterMenu, out _, out _);
+            _cookBtnRect = BuildTopButton(panel, "CookButton", 2, ModChrome.FlameSprite(), ToggleCookMenu, out _, out _);
+            _targetBtnRect = BuildTopButton(panel, "TargetButton", 3, ModChrome.PersonSprite(), ToggleTargetMenu, out _targetHover, out _targetIcon);
+        }
+
+        private RectTransform BuildTopButton(Transform panel, string name, int slot, Sprite sprite,
+            UnityEngine.Events.UnityAction onClick, out TileHover hover, out Image icon)
+        {
+            var go = new GameObject(name, typeof(RectTransform));
             go.transform.SetParent(panel, false);
-            _filterBtnRect = (RectTransform)go.transform;
-            _filterBtnRect.anchorMin = _filterBtnRect.anchorMax = new Vector2(1f, 1f);
-            _filterBtnRect.pivot = new Vector2(1f, 1f);
-            _filterBtnRect.sizeDelta = new Vector2(FilterBtnSize, SearchHeight);
-            _filterBtnRect.anchoredPosition = new Vector2(-GridSide, -(Margin + TitleHeight + Margin));
+            var rt = (RectTransform)go.transform;
+            rt.anchorMin = rt.anchorMax = new Vector2(1f, 1f);
+            rt.pivot = new Vector2(1f, 1f);
+            rt.sizeDelta = new Vector2(FilterBtnSize, SearchHeight);
+            rt.anchoredPosition = new Vector2(-BtnRight(slot), -(Margin + TitleHeight + Margin));
 
             var bg = go.AddComponent<Image>();
             bg.sprite = ModChrome.MakeCapSprite(10f);
@@ -750,24 +799,34 @@ namespace ItemSpawnerPlus
             var btn = go.AddComponent<Button>();
             btn.targetGraphic = bg;
             btn.transition = Selectable.Transition.None;
-            var hv = go.AddComponent<TileHover>();
-            hv.Target = bg;
-            hv.Normal = ModChrome.PanelInsetColor;
-            hv.Hover = ModChrome.TileHoverColor;
-            hv.Press = ModChrome.TilePressColor;
-            btn.onClick.AddListener(ToggleFilterMenu);
+            hover = go.AddComponent<TileHover>();
+            hover.Target = bg;
+            hover.Normal = ModChrome.PanelInsetColor;
+            hover.Hover = ModChrome.TileHoverColor;
+            hover.Press = ModChrome.TilePressColor;
+            btn.onClick.AddListener(onClick);
 
             var iconGo = new GameObject("Icon", typeof(RectTransform));
             iconGo.transform.SetParent(go.transform, false);
-            var icon = iconGo.AddComponent<Image>();
-            icon.sprite = ModChrome.FilterSprite();
+            icon = iconGo.AddComponent<Image>();
+            icon.sprite = sprite;
             icon.raycastTarget = false;
             icon.color = Color.white;
             var ir = (RectTransform)iconGo.transform;
             ir.anchorMin = ir.anchorMax = new Vector2(0.5f, 0.5f);
             ir.pivot = new Vector2(0.5f, 0.5f);
             ir.sizeDelta = new Vector2(30f, 30f);
+            return rt;
         }
+
+        private void CloseDropdowns()
+        {
+            SetFilterMenu(false);
+            SetCookMenu(false);
+            SetTargetMenu(false);
+        }
+
+        // --- filter dropdown ---
 
         private const float FilterRowH = 40f;
         private const float FilterMenuW = 224f;
@@ -802,7 +861,7 @@ namespace ItemSpawnerPlus
             _filterMenuRect.pivot = new Vector2(1f, 1f);
             float h = FilterMenuPad * 2f + _filterDefs.Length * FilterRowH + (FilterSectionCount() - 1) * FilterSectionGap;
             _filterMenuRect.sizeDelta = new Vector2(FilterMenuW, h);
-            _filterMenuRect.anchoredPosition = new Vector2(-GridSide, -(Margin + TitleHeight + Margin + SearchHeight + 6f));
+            _filterMenuRect.anchoredPosition = new Vector2(-BtnRight(1), -(Margin + TitleHeight + Margin + SearchHeight + 6f));
 
             var bg = _filterMenu.AddComponent<Image>();
             bg.sprite = ModChrome.MakeCapSprite(12f);
@@ -815,26 +874,29 @@ namespace ItemSpawnerPlus
             {
                 if (i > 0 && _filterDefs[i].section != _filterDefs[i - 1].section) gaps++;
                 float y = FilterMenuPad + i * FilterRowH + gaps * FilterSectionGap;
-                BuildFilterRow(_filterDefs[i].key, _filterDefs[i].label, y);
+                var key = _filterDefs[i].key;
+                _filterRows[key] = BuildCheckRow(_filterMenu.transform, "Row_" + key, SpawnerLocalization.Get(_filterDefs[i].label),
+                    y, FilterMenuPad, FilterRowH, () => OnFilterToggle(key));
             }
 
             _filterMenu.SetActive(false);
             RefreshFilterChecks();
         }
 
-        private void BuildFilterRow(FilterKey key, SpawnerText label, float topOffset)
+        private (Image box, Image tick, TextMeshProUGUI label) BuildCheckRow(Transform menu, string name,
+            string text, float topOffset, float pad, float rowH, UnityEngine.Events.UnityAction onClick, bool radio = false)
         {
-            var rowGo = new GameObject("Row_" + key, typeof(RectTransform));
-            rowGo.transform.SetParent(_filterMenu.transform, false);
+            var rowGo = new GameObject(name, typeof(RectTransform));
+            rowGo.transform.SetParent(menu, false);
             var rr = (RectTransform)rowGo.transform;
             rr.anchorMin = new Vector2(0f, 1f);
             rr.anchorMax = new Vector2(1f, 1f);
             rr.pivot = new Vector2(0.5f, 1f);
-            rr.offsetMin = new Vector2(FilterMenuPad, -(topOffset + FilterRowH));
-            rr.offsetMax = new Vector2(-FilterMenuPad, -topOffset);
+            rr.offsetMin = new Vector2(pad, -(topOffset + rowH));
+            rr.offsetMax = new Vector2(-pad, -topOffset);
 
             var rowBg = rowGo.AddComponent<Image>();
-            rowBg.sprite = ModChrome.MakeCapSprite(8f);
+            rowBg.sprite = ModChrome.RowSprite();
             rowBg.type = Image.Type.Sliced;
             rowBg.color = new Color(0f, 0f, 0f, 0f);
             var btn = rowGo.AddComponent<Button>();
@@ -845,13 +907,13 @@ namespace ItemSpawnerPlus
             hv.Normal = new Color(0f, 0f, 0f, 0f);
             hv.Hover = new Color(1f, 1f, 1f, 0.10f);
             hv.Press = new Color(1f, 1f, 1f, 0.16f);
-            btn.onClick.AddListener(() => OnFilterToggle(key));
+            btn.onClick.AddListener(onClick);
 
             var boxGo = new GameObject("Box", typeof(RectTransform));
             boxGo.transform.SetParent(rowGo.transform, false);
             var box = boxGo.AddComponent<Image>();
-            box.sprite = ModChrome.MakeCapSprite(5f);
-            box.type = Image.Type.Sliced;
+            box.sprite = radio ? ModChrome.CircleSprite() : ModChrome.BoxSprite();
+            box.type = radio ? Image.Type.Simple : Image.Type.Sliced;
             box.raycastTarget = false;
             var br = (RectTransform)boxGo.transform;
             br.anchorMin = br.anchorMax = new Vector2(0f, 0.5f);
@@ -862,22 +924,45 @@ namespace ItemSpawnerPlus
             var tickGo = new GameObject("Tick", typeof(RectTransform));
             tickGo.transform.SetParent(boxGo.transform, false);
             var tick = tickGo.AddComponent<Image>();
-            tick.sprite = ModChrome.CheckSprite();
             tick.raycastTarget = false;
-            tick.color = new Color(0.10f, 0.09f, 0.03f);
-            ModChrome.StretchFull((RectTransform)tickGo.transform);
+            if (radio)
+            {
+                box.color = CheckOffColor;
+                tick.sprite = ModChrome.CircleSprite();
+                tick.color = RadioDotColor;
+                var tr = (RectTransform)tickGo.transform;
+                tr.anchorMin = tr.anchorMax = new Vector2(0.5f, 0.5f);
+                tr.sizeDelta = new Vector2(12f, 12f);
+            }
+            else
+            {
+                tick.sprite = ModChrome.CheckSprite();
+                tick.color = new Color(0.10f, 0.09f, 0.03f);
+                ModChrome.StretchFull((RectTransform)tickGo.transform);
+            }
 
             var lbl = ModChrome.MakeText(rowGo.transform, "Label", 17f, ModChrome.TitleColor,
                 TextAlignmentOptions.MidlineLeft, _font);
             lbl.raycastTarget = false;
-            lbl.text = SpawnerLocalization.Get(label);
+            lbl.text = text;
             var lr = (RectTransform)lbl.transform;
             lr.anchorMin = new Vector2(0f, 0f);
             lr.anchorMax = new Vector2(1f, 1f);
             lr.offsetMin = new Vector2(36f, 0f);
             lr.offsetMax = new Vector2(-4f, 0f);
 
-            _filterRows[key] = (box, tick, lbl);
+            return (box, tick, lbl);
+        }
+
+        private static readonly Color CheckOffColor = new Color(0f, 0f, 0f, 0.45f);
+        // opaque version of a ticked box as it renders on the dropdown, so the dot matches it over the dark ring
+        private static readonly Color RadioDotColor = Color.Lerp(ModChrome.PanelBorderColor,
+            new Color(ModChrome.TileHoverColor.r, ModChrome.TileHoverColor.g, ModChrome.TileHoverColor.b, 1f), ModChrome.TileHoverColor.a);
+
+        private static void SetCheck(Image box, Image tick, bool on)
+        {
+            if (box != null) box.color = on ? ModChrome.TileHoverColor : CheckOffColor;
+            if (tick != null) tick.enabled = on;
         }
 
         private bool ClassAllowed(ItemClass c)
@@ -908,10 +993,8 @@ namespace ItemSpawnerPlus
         {
             foreach (var kv in _filterRows)
             {
-                bool on = _filterState[kv.Key];
                 var (box, tick, _) = kv.Value;
-                if (box != null) box.color = on ? ModChrome.TileHoverColor : new Color(0f, 0f, 0f, 0.45f);
-                if (tick != null) tick.enabled = on;
+                SetCheck(box, tick, _filterState[kv.Key]);
             }
         }
 
@@ -922,7 +1005,7 @@ namespace ItemSpawnerPlus
                     r.label.text = SpawnerLocalization.Get(def.label);
         }
 
-        private void ToggleFilterMenu() { if (!_filterOpen) SetCookMenu(false); SetFilterMenu(!_filterOpen); }
+        private void ToggleFilterMenu() { bool open = !_filterOpen; CloseDropdowns(); SetFilterMenu(open); }
 
         private void SetFilterMenu(bool open)
         {
@@ -930,44 +1013,7 @@ namespace ItemSpawnerPlus
             if (_filterMenu != null) _filterMenu.SetActive(open);
         }
 
-        // --- cook level button + dropdown ---
-
-        private void BuildCookButton(Transform panel)
-        {
-            var go = new GameObject("CookButton", typeof(RectTransform));
-            go.transform.SetParent(panel, false);
-            _cookBtnRect = (RectTransform)go.transform;
-            _cookBtnRect.anchorMin = _cookBtnRect.anchorMax = new Vector2(1f, 1f);
-            _cookBtnRect.pivot = new Vector2(1f, 1f);
-            _cookBtnRect.sizeDelta = new Vector2(FilterBtnSize, SearchHeight);
-            _cookBtnRect.anchoredPosition = new Vector2(-(GridSide + FilterBtnSize + FilterGap), -(Margin + TitleHeight + Margin));
-
-            var bg = go.AddComponent<Image>();
-            bg.sprite = ModChrome.MakeCapSprite(10f);
-            bg.type = Image.Type.Sliced;
-            bg.color = ModChrome.PanelInsetColor;
-
-            var btn = go.AddComponent<Button>();
-            btn.targetGraphic = bg;
-            btn.transition = Selectable.Transition.None;
-            var hv = go.AddComponent<TileHover>();
-            hv.Target = bg;
-            hv.Normal = ModChrome.PanelInsetColor;
-            hv.Hover = ModChrome.TileHoverColor;
-            hv.Press = ModChrome.TilePressColor;
-            btn.onClick.AddListener(ToggleCookMenu);
-
-            var iconGo = new GameObject("Icon", typeof(RectTransform));
-            iconGo.transform.SetParent(go.transform, false);
-            var icon = iconGo.AddComponent<Image>();
-            icon.sprite = ModChrome.FlameSprite();
-            icon.raycastTarget = false;
-            icon.color = Color.white;
-            var ir = (RectTransform)iconGo.transform;
-            ir.anchorMin = ir.anchorMax = new Vector2(0.5f, 0.5f);
-            ir.pivot = new Vector2(0.5f, 0.5f);
-            ir.sizeDelta = new Vector2(30f, 30f);
-        }
+        // --- cook level dropdown ---
 
         private const float CookMenuW = 268f;
         private const float CookMenuPad = 14f;
@@ -982,8 +1028,7 @@ namespace ItemSpawnerPlus
             _cookMenuRect.anchorMin = _cookMenuRect.anchorMax = new Vector2(1f, 1f);
             _cookMenuRect.pivot = new Vector2(1f, 1f);
             _cookMenuRect.sizeDelta = new Vector2(CookMenuW, CookMenuPad * 2f + 16f + 22f + 10f + CookSliderH);
-            _cookMenuRect.anchoredPosition = new Vector2(-(GridSide + FilterBtnSize + FilterGap),
-                -(Margin + TitleHeight + Margin + SearchHeight + 6f));
+            _cookMenuRect.anchoredPosition = new Vector2(-BtnRight(2), -(Margin + TitleHeight + Margin + SearchHeight + 6f));
 
             var bg = _cookMenu.AddComponent<Image>();
             bg.sprite = ModChrome.MakeCapSprite(12f);
@@ -1119,12 +1164,212 @@ namespace ItemSpawnerPlus
             }
         }
 
-        private void ToggleCookMenu() { if (!_cookOpen) SetFilterMenu(false); SetCookMenu(!_cookOpen); }
+        private void ToggleCookMenu() { bool open = !_cookOpen; CloseDropdowns(); SetCookMenu(open); }
 
         private void SetCookMenu(bool open)
         {
             _cookOpen = open;
             if (_cookMenu != null) _cookMenu.SetActive(open);
+        }
+
+        // --- spawn target dropdown ---
+
+        private const float TargetMenuW = 280f;
+        private const float TargetMenuPad = 10f;
+        private const float TargetTitleH = 26f;
+
+        private void BuildTargetMenu(Transform panel)
+        {
+            _targetMenu = new GameObject("TargetMenu", typeof(RectTransform));
+            _targetMenu.transform.SetParent(panel, false);
+            _targetMenuRect = (RectTransform)_targetMenu.transform;
+            _targetMenuRect.anchorMin = _targetMenuRect.anchorMax = new Vector2(1f, 1f);
+            _targetMenuRect.pivot = new Vector2(1f, 1f);
+            _targetMenuRect.anchoredPosition = new Vector2(-BtnRight(3), -(Margin + TitleHeight + Margin + SearchHeight + 6f));
+
+            var bg = _targetMenu.AddComponent<Image>();
+            bg.sprite = ModChrome.MakeCapSprite(12f);
+            bg.type = Image.Type.Sliced;
+            bg.color = new Color(ModChrome.PanelBorderColor.r, ModChrome.PanelBorderColor.g, ModChrome.PanelBorderColor.b, 0.98f);
+
+            _targetTitleLabel = ModChrome.MakeText(_targetMenu.transform, "Title", 15f,
+                new Color(0.82f, 0.87f, 1f), TextAlignmentOptions.Center, _font);
+            _targetTitleLabel.raycastTarget = false;
+            _targetTitleLabel.text = SpawnerLocalization.Get(SpawnerText.TargetTitle);
+            var tr = (RectTransform)_targetTitleLabel.transform;
+            tr.anchorMin = new Vector2(0f, 1f); tr.anchorMax = new Vector2(1f, 1f); tr.pivot = new Vector2(0.5f, 1f);
+            tr.offsetMin = new Vector2(TargetMenuPad, -(TargetMenuPad + TargetTitleH));
+            tr.offsetMax = new Vector2(-TargetMenuPad, -TargetMenuPad);
+
+            _targetMenu.SetActive(false);
+        }
+
+        private static List<Character> TargetCandidates()
+        {
+            var list = new List<Character>();
+            try
+            {
+                foreach (var c in PlayerHandler.GetAllPlayerCharacters())
+                    if (c != null && !c.isBot && c.photonView != null && c.photonView.Owner != null) list.Add(c);
+            }
+            catch { }
+            list.Sort((a, b) => a.IsLocal != b.IsLocal ? (a.IsLocal ? -1 : 1)
+                : a.photonView.Owner.ActorNumber.CompareTo(b.photonView.Owner.ActorNumber));
+            return list;
+        }
+
+        private static string TargetName(Character c)
+        {
+            string n = null;
+            try { n = c.characterName; } catch { }
+            if (string.IsNullOrEmpty(n)) n = "?";
+            return c.IsLocal ? n + " " + SpawnerLocalization.Get(SpawnerText.TargetYou) : n;
+        }
+
+        private void RebuildTargetRows()
+        {
+            foreach (var go in _targetRows) if (go != null) Destroy(go);
+            _targetRows.Clear();
+            var players = TargetCandidates();
+            for (int i = 0; i < players.Count; i++)
+            {
+                var c = players[i];
+                int actor = c.IsLocal ? -1 : c.photonView.Owner.ActorNumber;
+                var (box, tick, lbl) = BuildCheckRow(_targetMenu.transform, "Row_" + actor, TargetName(c),
+                    TargetMenuPad + TargetTitleH + i * FilterRowH, TargetMenuPad, FilterRowH, () => OnTargetPicked(actor), radio: true);
+                lbl.overflowMode = TextOverflowModes.Ellipsis;
+                tick.enabled = actor == _targetActor;
+                _targetRows.Add(box.transform.parent.gameObject);
+            }
+            _targetMenuRect.sizeDelta = new Vector2(TargetMenuW,
+                TargetMenuPad * 2f + TargetTitleH + players.Count * FilterRowH);
+        }
+
+        private void OnTargetPicked(int actor)
+        {
+            _targetActor = actor;
+            SetTargetMenu(false);
+            RefreshTargetButton();
+        }
+
+        private void RefreshTargetButton()
+        {
+            if (_targetIcon == null) return;
+            var players = TargetCandidates();
+            bool locked = players.Count <= 1;
+            if (_targetActor >= 0)
+            {
+                bool present = false;
+                foreach (var c in players)
+                    if (!c.IsLocal && c.photonView.Owner.ActorNumber == _targetActor) { present = true; break; }
+                if (!present) _targetActor = -1;
+            }
+            _targetIcon.color = locked ? new Color(1f, 1f, 1f, 0.3f)
+                : _targetActor >= 0 ? new Color(1f, 0.82f, 0.22f) : Color.white;
+            if (_targetHover != null)
+            {
+                _targetHover.Hover = locked ? ModChrome.PanelInsetColor : ModChrome.TileHoverColor;
+                _targetHover.Press = locked ? ModChrome.PanelInsetColor : ModChrome.TilePressColor;
+                _targetHover.Apply();
+            }
+        }
+
+        private void ToggleTargetMenu()
+        {
+            bool open = !_targetOpen;
+            CloseDropdowns();
+            RefreshTargetButton();
+            if (!open || TargetCandidates().Count <= 1) return;
+            RebuildTargetRows();
+            SetTargetMenu(true);
+        }
+
+        private void SetTargetMenu(bool open)
+        {
+            _targetOpen = open;
+            if (_targetMenu != null) _targetMenu.SetActive(open);
+        }
+
+        private Character SpawnTarget()
+        {
+            var local = Character.localCharacter;
+            if (_targetActor < 0) return local;
+            foreach (var c in TargetCandidates())
+                if (!c.IsLocal && c.photonView.Owner.ActorNumber == _targetActor) return c;
+            RefreshTargetButton();
+            return local;
+        }
+
+        // --- menu key rebind ---
+
+        private void ToggleKeyCapture()
+        {
+            if (_capturingKey) { EndKeyCapture(); return; }
+            CloseDropdowns();
+            _capturingKey = true;
+            try
+            {
+                if (_searchInput != null) _searchInput.DeactivateInputField();
+                if (EventSystem.current != null) EventSystem.current.SetSelectedGameObject(null);
+            }
+            catch { }
+            RefreshKeyButton();
+            RefreshFooter();
+        }
+
+        private void EndKeyCapture()
+        {
+            if (!_capturingKey) return;
+            _capturingKey = false;
+            _keyCapturedFrame = Time.frameCount;
+            RefreshKeyButton();
+            RefreshFooter();
+            if (MenuOpen) FocusSearch();
+        }
+
+        private static void ConsumeCancelInput()
+        {
+            try
+            {
+                var ui = UIInputHandler.Instance;
+                if (ui != null) ui.cancelWasPressed = false;
+                var lc = Character.localCharacter;
+                if (lc != null && lc.input != null) lc.input.pauseWasPressed = false;
+            }
+            catch { }
+        }
+
+        private void RefreshKeyButton()
+        {
+            if (_keyHover == null) return;
+            _keyHover.Normal = _capturingKey ? ModChrome.TilePressColor : ModChrome.PanelInsetColor;
+            _keyHover.Apply();
+        }
+
+        private void UpdateKeyCapture()
+        {
+            if (!Input.anyKeyDown) return;
+            if (Input.GetKeyDown(KeyCode.Escape))
+            {
+                PauseSuppressPatch.SuppressNextOpen();
+                EndKeyCapture();
+                return;
+            }
+            // left / right / middle click cancel, except on the key button itself (its onClick does that)
+            if (Input.GetMouseButtonDown(0) || Input.GetMouseButtonDown(1) || Input.GetMouseButtonDown(2))
+            {
+                if (!PointerOver(_keyBtnRect)) EndKeyCapture();
+                return;
+            }
+            _allKeys ??= (KeyCode[])Enum.GetValues(typeof(KeyCode));
+            foreach (var k in _allKeys)
+            {
+                if (k == KeyCode.None || k >= KeyCode.JoystickButton0 || !Input.GetKeyDown(k)) continue;
+                if (_cfg != null) _cfg.ToggleKey.Value = k;
+                _log?.LogInfo($"Item Spawner Plus: menu key rebound to {k}.");
+                EndKeyCapture();
+                return;
+            }
         }
 
         private void LayoutPanel()
@@ -1581,8 +1826,11 @@ namespace ItemSpawnerPlus
                     catch { before = null; }
                 }
 
-                _spawnInHand.Invoke(local.refs.items, new object[] { item.gameObject.name });
-                _log?.LogInfo($"Item Spawner Plus: spawned {item.gameObject.name}.");
+                // the master runs this RPC for whichever character it is sent on, so vanilla targets work too
+                var target = SpawnTarget();
+                if (target == null || target.refs == null || target.refs.items == null) target = local;
+                _spawnInHand.Invoke(target.refs.items, new object[] { item.gameObject.name });
+                _log?.LogInfo($"Item Spawner Plus: spawned {item.gameObject.name} for {TargetName(target)}.");
 
                 if (before != null) StartCoroutine(CookAfterSpawn(item.itemID, _cookLevel, before));
             }
@@ -1623,11 +1871,13 @@ namespace ItemSpawnerPlus
 
                 if (def.NeedsMobManager) CreatureCatalog.EnsureMobManager();
 
-                Vector3 flat = local.data != null ? local.data.lookDirection_Flat : Vector3.zero;
-                if (flat == Vector3.zero) flat = local.transform.forward;
+                var anchor = SpawnTarget();
+                if (anchor == null) anchor = local;
+                Vector3 flat = anchor.data != null ? anchor.data.lookDirection_Flat : Vector3.zero;
+                if (flat == Vector3.zero) flat = anchor.transform.forward;
                 flat = flat.normalized;
 
-                Vector3 origin = local.Center + flat * def.SpawnDistance + Vector3.up;
+                Vector3 origin = anchor.Center + flat * def.SpawnDistance + Vector3.up;
                 var hit = HelperFunctions.LineCheck(origin + Vector3.up * 3f, origin - Vector3.up * 14f,
                     HelperFunctions.LayerType.TerrainMap);
                 Vector3 pos = hit.transform ? hit.point + Vector3.up * 0.5f : origin;
@@ -1635,7 +1885,7 @@ namespace ItemSpawnerPlus
 
                 if (def.RoomObject) PhotonNetwork.InstantiateRoomObject(key, pos, rot, 0);
                 else PhotonNetwork.Instantiate(key, pos, rot, 0);
-                _log?.LogInfo($"Item Spawner Plus: spawned creature {def.Label} via {how}.");
+                _log?.LogInfo($"Item Spawner Plus: spawned creature {def.Label} near {TargetName(anchor)} via {how}.");
             }
             catch (Exception e)
             {

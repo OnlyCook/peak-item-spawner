@@ -29,6 +29,9 @@ namespace ItemSpawnerPlus
         CookWellDone,
         CookBurnt,
         CookIncinerated,
+        TargetTitle,
+        TargetYou,
+        RebindPrompt,
     }
 
     internal static class SpawnerLocalization
@@ -190,6 +193,36 @@ namespace ItemSpawnerPlus
                 "Incinerated", "Incinéré", "Incenerito", "Eingeäschert", "Incinerado", "Incinerado",
                 "Incinerado", "Испепелено", "Спопеліло", "焚毁", "焚毀", "灰化", "재가 됨",
                 "Spopielone", "Kül olmuş",
+            },
+            [SpawnerText.TargetTitle] = new[]
+            {
+                "Spawn items for", "Faire apparaître pour", "Genera oggetti per", "Gegenstände erzeugen für",
+                "Generar objetos para", "Generar objetos para", "Gerar itens para",
+                "Создавать предметы для", "Створювати предмети для", "为谁生成物品", "為誰生成物品",
+                "アイテムの出現先", "아이템 생성 대상", "Twórz przedmioty dla", "Eşyaları şuna ver",
+            },
+            [SpawnerText.TargetYou] = new[]
+            {
+                "(you)", "(vous)", "(tu)", "(du)", "(tú)", "(tú)", "(você)", "(вы)", "(ви)",
+                "（你）", "（你）", "（あなた）", "(나)", "(ty)", "(sen)",
+            },
+            [SpawnerText.RebindPrompt] = new[]
+            {
+                "Press a new key to open / close this menu (Esc to cancel)",
+                "Appuyez sur une nouvelle touche pour ouvrir / fermer ce menu (Échap pour annuler)",
+                "Premi un nuovo tasto per aprire / chiudere questo menu (Esc per annullare)",
+                "Drücke eine neue Taste zum Öffnen / Schließen dieses Menüs (Esc zum Abbrechen)",
+                "Pulsa una nueva tecla para abrir / cerrar este menú (Esc para cancelar)",
+                "Presiona una nueva tecla para abrir / cerrar este menú (Esc para cancelar)",
+                "Pressione uma nova tecla para abrir / fechar este menu (Esc para cancelar)",
+                "Нажмите новую клавишу для открытия / закрытия меню (Esc — отмена)",
+                "Натисніть нову клавішу для відкриття / закриття меню (Esc — скасувати)",
+                "按下新的按键来打开 / 关闭此菜单（Esc 取消）",
+                "按下新的按鍵來開啟 / 關閉此選單（Esc 取消）",
+                "このメニューを開閉する新しいキーを押してください（Esc でキャンセル）",
+                "이 메뉴를 열고 닫을 새 키를 누르세요 (Esc로 취소)",
+                "Naciśnij nowy klawisz do otwierania / zamykania menu (Esc, aby anulować)",
+                "Bu menüyü açıp kapatmak için yeni bir tuşa basın (iptal için Esc)",
             },
         };
 

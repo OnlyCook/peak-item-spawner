@@ -1,3 +1,7 @@
+## 1.1.1
+
+- Fixed not being able to close the menu with `Esc` on Windows 11 in some cases.
+
 ## 1.1.0
 
 - Now able to spawn creatures.

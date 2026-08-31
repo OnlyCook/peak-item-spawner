@@ -214,6 +214,11 @@ namespace ItemSpawnerPlus
 
         internal static Sprite TileSprite() => _tileSprite ??= MakeCapSprite(12f);
 
+        private static Sprite _rowSprite, _boxSprite, _circleSprite;
+        internal static Sprite RowSprite() => _rowSprite ??= MakeCapSprite(8f);
+        internal static Sprite BoxSprite() => _boxSprite ??= MakeCapSprite(5f);
+        internal static Sprite CircleSprite() => _circleSprite ??= MakeCapSprite(24f);
+
         // alpha-only rounded shape, tinted per use via Image.color
         internal static Sprite MakeCapSprite(float radius)
         {
@@ -283,12 +288,14 @@ namespace ItemSpawnerPlus
             return (pa - ba * h).magnitude;
         }
 
-        private static Sprite _flameSprite, _filterSprite, _clearSprite, _errGlyph, _warnGlyph, _errChip, _warnChip;
+        private static Sprite _flameSprite, _filterSprite, _clearSprite, _keyboardSprite, _personSprite, _errGlyph, _warnGlyph, _errChip, _warnChip;
 
         // Material Symbols icons, shipped as embedded white-on-transparent PNGs
         internal static Sprite FlameSprite() => _flameSprite ??= LoadEmbeddedSprite("ItemSpawnerPlus.flame.png");
         internal static Sprite FilterSprite() => _filterSprite ??= LoadEmbeddedSprite("ItemSpawnerPlus.filter.png");
         internal static Sprite ClearSprite() => _clearSprite ??= LoadEmbeddedSprite("ItemSpawnerPlus.clear.png");
+        internal static Sprite KeyboardSprite() => _keyboardSprite ??= LoadEmbeddedSprite("ItemSpawnerPlus.keyboard.png");
+        internal static Sprite PersonSprite() => _personSprite ??= LoadEmbeddedSprite("ItemSpawnerPlus.person.png");
 
         // corner badges: near-black chip, coloured ring + glyph (error red, warning orange)
         private static readonly Color BadgeChipFill = new Color(0.09f, 0.08f, 0.04f, 0.97f);

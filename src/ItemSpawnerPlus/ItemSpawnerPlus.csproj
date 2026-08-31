@@ -4,7 +4,7 @@
     <TargetFramework>netstandard2.1</TargetFramework>
     <AssemblyName>ItemSpawnerPlus</AssemblyName>
     <Product>ItemSpawnerPlus</Product>
-    <Version>1.1.0</Version>
+    <Version>1.1.1</Version>
     <LangVersion>latest</LangVersion>
     <Nullable>disable</Nullable>
     <!-- BepInEx / Unity assemblies are not annotated; silence the resulting noise. -->
@@ -36,6 +36,8 @@
     <EmbeddedResource Include="Assets/flame.png" LogicalName="ItemSpawnerPlus.flame.png" />
     <EmbeddedResource Include="Assets/filter.png" LogicalName="ItemSpawnerPlus.filter.png" />
     <EmbeddedResource Include="Assets/clear.png" LogicalName="ItemSpawnerPlus.clear.png" />
+    <EmbeddedResource Include="Assets/keyboard.png" LogicalName="ItemSpawnerPlus.keyboard.png" />
+    <EmbeddedResource Include="Assets/person.png" LogicalName="ItemSpawnerPlus.person.png" />
     <EmbeddedResource Include="Assets/warn-error.png" LogicalName="ItemSpawnerPlus.warn-error.png" />
     <EmbeddedResource Include="Assets/warn-explode.png" LogicalName="ItemSpawnerPlus.warn-explode.png" />
     <!-- creature icons: LogicalName = ItemSpawnerPlus.creature.<file-stem>.png -->

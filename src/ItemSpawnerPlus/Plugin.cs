@@ -47,7 +47,7 @@ namespace ItemSpawnerPlus
                 return;
             }
 
-            if (Input.GetKeyDown(Plugin.Instance.Cfg.ToggleKey.Value))
+            if (!_window.SwallowToggleKey && Input.GetKeyDown(Plugin.Instance.Cfg.ToggleKey.Value))
                 _window.ToggleMenu();
         }
     }
