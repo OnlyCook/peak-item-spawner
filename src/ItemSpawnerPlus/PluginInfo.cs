@@ -4,6 +4,6 @@ namespace ItemSpawnerPlus
     {
         public const string Guid = "OnlyCook.ItemSpawnerPlus";
         public const string Name = "Item Spawner Plus";
-        public const string Version = "1.0.0";
+        public const string Version = "1.1.0";
     }
 }
