@@ -1,3 +1,8 @@
+## 1.2.0
+
+- Now able to spawn items into other players' inventories.
+- Added button to rebind the menu's toggle key directly inside the menu itself.
+
 ## 1.1.1
 
 - Fixed not being able to close the menu with `Esc` on Windows 11 in some cases.
