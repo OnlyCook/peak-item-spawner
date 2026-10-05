@@ -1,3 +1,7 @@
+## 1.3.0
+
+- Added the ability to favorite items which moves them to the top (and allows filtering to show only favorites).
+
 ## 1.2.0
 
 - Now able to spawn items into other players' inventories.

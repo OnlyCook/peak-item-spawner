@@ -76,8 +76,20 @@ namespace ItemSpawnerPlus
         private readonly List<ItemCategory> _tileCategory = new List<ItemCategory>();
         // 0 = never, N = this item detonates on spawn once the cook level reaches N
         private readonly List<int> _tileExplodeAt = new List<int>();
+        private readonly List<string> _tileFavKey = new List<string>();
+        private readonly List<bool> _tileFav = new List<bool>();
+        // row indices in display order: favorites first, each group alphabetical
+        private readonly List<int> _order = new List<int>();
+        private int _hoveredRow = -1;
+        private float _cellW;
+        private int _shownRows;
+        private readonly List<int> _animRows = new List<int>();
+        private readonly List<Vector2> _animFrom = new List<Vector2>();
+        private readonly List<Vector2> _animTo = new List<Vector2>();
+        private float _animElapsed;
+        private const float AnimDuration = 0.18f;
 
-        private enum FilterKey { Vanilla, Modded, Special, Food, Equipment, Creature }
+        private enum FilterKey { Vanilla, Modded, Special, Food, Equipment, Creature, Favorites }
 
         private RectTransform _filterBtnRect;
         private GameObject _filterMenu;
@@ -88,6 +100,7 @@ namespace ItemSpawnerPlus
         {
             [FilterKey.Vanilla] = true, [FilterKey.Modded] = true, [FilterKey.Special] = true,
             [FilterKey.Food] = true, [FilterKey.Equipment] = true, [FilterKey.Creature] = false,
+            [FilterKey.Favorites] = false,
         };
         private readonly Dictionary<FilterKey, (Image box, Image tick, TextMeshProUGUI label)> _filterRows = new();
 
@@ -280,6 +293,7 @@ namespace ItemSpawnerPlus
             _loadingRoot?.SetActive(false);
             EndKeyCapture();
             CloseDropdowns();
+            FinishTileAnim();
             // eat the same-frame pause the Escape close would otherwise trigger
             PauseSuppressPatch.SuppressNextOpen();
         }
@@ -339,6 +353,8 @@ namespace ItemSpawnerPlus
                 float t = Mathf.Clamp01(_dimFadeElapsed / DimFadeDuration);
                 _dimImage.color = new Color(ModChrome.DimColor.r, ModChrome.DimColor.g, ModChrome.DimColor.b, ModChrome.DimColor.a * t);
             }
+
+            TickTileAnim();
 
             if (MinimalUi) return; // flat panel sprite never changes
 
@@ -842,6 +858,7 @@ namespace ItemSpawnerPlus
             (FilterKey.Food, SpawnerText.FilterFood, 1),
             (FilterKey.Equipment, SpawnerText.FilterEquipment, 1),
             (FilterKey.Creature, SpawnerText.FilterCreatures, 2),
+            (FilterKey.Favorites, SpawnerText.FilterFavorites, 3),
         };
 
         private static int FilterSectionCount()
@@ -1403,31 +1420,96 @@ namespace ItemSpawnerPlus
             if (_gridContent == null || _scrollRect == null) return;
             try
             {
+                CancelTileAnim();
                 float scrollW = _lastPanelW - 2f * GridSide;
-                float cellW = Mathf.Max(40f, (scrollW - 2f * GridInset - (GridColumns - 1) * CellSpacing) / GridColumns);
+                _cellW = Mathf.Max(40f, (scrollW - 2f * GridInset - (GridColumns - 1) * CellSpacing) / GridColumns);
+                var size = new Vector2(_cellW, CellH);
 
                 int slot = 0;
-                for (int i = 0; i < _tiles.Count; i++)
+                for (int k = 0; k < _order.Count; k++)
                 {
+                    int i = _order[k];
+                    if (i >= _tiles.Count) continue;
                     var t = _tiles[i];
                     if (!t.activeSelf) continue;
-                    int row = slot / GridColumns;
-                    int col = slot % GridColumns;
                     var rt = (RectTransform)t.transform;
-                    rt.sizeDelta = new Vector2(cellW, CellH);
-                    rt.anchoredPosition = new Vector2(
-                        GridInset + col * (cellW + CellSpacing),
-                        -(GridInset + row * (CellH + CellSpacing)));
+                    // unchanged writes still dirty the auto-sized TMP labels
+                    if (rt.sizeDelta != size) rt.sizeDelta = size;
+                    var pos = SlotPos(slot);
+                    if (rt.anchoredPosition != pos) rt.anchoredPosition = pos;
                     slot++;
                 }
 
-                int rows = Mathf.Max(1, Mathf.CeilToInt(slot / (float)GridColumns));
-                _gridContent.sizeDelta = new Vector2(scrollW,
-                    2f * GridInset + rows * CellH + (rows - 1) * CellSpacing);
+                SetContentRows(slot);
                 Canvas.ForceUpdateCanvases();
                 _scrollRect.verticalNormalizedPosition = restoreScroll ? Mathf.Clamp01(_savedScroll) : 1f;
             }
             catch { }
+        }
+
+        private Vector2 SlotPos(int slot) => new Vector2(
+            GridInset + (slot % GridColumns) * (_cellW + CellSpacing),
+            -(GridInset + (slot / GridColumns) * (CellH + CellSpacing)));
+
+        private void SetContentRows(int shown)
+        {
+            int rows = Mathf.Max(1, Mathf.CeilToInt(shown / (float)GridColumns));
+            if (rows == _shownRows && _gridContent.sizeDelta.x == _lastPanelW - 2f * GridSide) return;
+            _shownRows = rows;
+            _gridContent.sizeDelta = new Vector2(_lastPanelW - 2f * GridSide,
+                2f * GridInset + rows * CellH + (rows - 1) * CellSpacing);
+        }
+
+        // slides only the tiles whose slot changed, no full relayout or scroll reset
+        private void ShiftTiles()
+        {
+            if (_gridContent == null) return;
+            _animRows.Clear();
+            _animFrom.Clear();
+            _animTo.Clear();
+            int slot = 0;
+            for (int k = 0; k < _order.Count; k++)
+            {
+                int i = _order[k];
+                if (i >= _tiles.Count || !_tiles[i].activeSelf) continue;
+                var rt = (RectTransform)_tiles[i].transform;
+                var to = SlotPos(slot++);
+                if (rt.anchoredPosition == to) continue;
+                _animRows.Add(i);
+                _animFrom.Add(rt.anchoredPosition);
+                _animTo.Add(to);
+            }
+            SetContentRows(slot);
+            _animElapsed = 0f;
+            if (slot == 0 && _emptyText != null)
+            {
+                _emptyText.text = SpawnerLocalization.Get(SpawnerText.NoMatches);
+                _emptyText.gameObject.SetActive(true);
+            }
+        }
+
+        private void TickTileAnim()
+        {
+            if (_animRows.Count == 0) return;
+            _animElapsed += Time.unscaledDeltaTime;
+            float t = Mathf.Clamp01(_animElapsed / AnimDuration);
+            t = t * t * (3f - 2f * t);
+            for (int k = 0; k < _animRows.Count; k++)
+                ((RectTransform)_tiles[_animRows[k]].transform).anchoredPosition = Vector2.LerpUnclamped(_animFrom[k], _animTo[k], t);
+            if (_animElapsed >= AnimDuration) CancelTileAnim();
+        }
+
+        private void FinishTileAnim()
+        {
+            _animElapsed = AnimDuration;
+            TickTileAnim();
+        }
+
+        private void CancelTileAnim()
+        {
+            _animRows.Clear();
+            _animFrom.Clear();
+            _animTo.Clear();
         }
 
         private void RefreshEntries()
@@ -1458,6 +1540,8 @@ namespace ItemSpawnerPlus
                 _tileClass.Clear();
                 _tileCategory.Clear();
                 _tileExplodeAt.Clear();
+                _tileFavKey.Clear();
+                _tileFav.Clear();
                 for (int i = 0; i < order.Count; i++)
                 {
                     var (item, def, _) = order[i];
@@ -1473,6 +1557,7 @@ namespace ItemSpawnerPlus
                         _tileClass.Add(ItemClass.Creature);
                         _tileCategory.Add(ItemCategory.None);
                         _tileExplodeAt.Add(0);
+                        _tileFavKey.Add(Favorites.CreatureKey(def));
                     }
                     else
                     {
@@ -1481,8 +1566,13 @@ namespace ItemSpawnerPlus
                         _tileClass.Add(ItemClassifier.Classify(item));
                         _tileCategory.Add(ItemClassifier.CategoriesOf(item));
                         _tileExplodeAt.Add(ItemClassifier.ExplodeCookLevel(item));
+                        _tileFavKey.Add(Favorites.ItemKey(item));
                     }
+
+                    _tileFav.Add(Favorites.Contains(_tileFavKey[i]));
+                    BindHeart(tile, i);
                 }
+                RebuildOrder();
                 for (int i = order.Count; i < _tiles.Count; i++)
                     _tiles[i].SetActive(false);
 
@@ -1608,6 +1698,8 @@ namespace ItemSpawnerPlus
 
             var hover = tileGo.AddComponent<TileHover>();
             hover.Target = bg;
+            int row = _tiles.Count;
+            hover.Hovered = over => OnTileHovered(row, over);
             hover.Normal = ModChrome.PanelInsetColor;
             hover.Hover = ModChrome.TileHoverColor;
             hover.Press = ModChrome.TilePressColor;
@@ -1665,7 +1757,83 @@ namespace ItemSpawnerPlus
 
             badgeGo.SetActive(false);
 
+            var heartGo = new GameObject("Heart", typeof(RectTransform));
+            heartGo.transform.SetParent(tileGo.transform, false);
+            var heartImg = heartGo.AddComponent<Image>();
+            heartImg.sprite = ModChrome.HeartSprite();
+            var heartRt = (RectTransform)heartGo.transform;
+            heartRt.anchorMin = heartRt.anchorMax = new Vector2(0f, 1f);
+            heartRt.pivot = new Vector2(0f, 1f);
+            heartRt.sizeDelta = new Vector2(HeartSize, HeartSize);
+            heartRt.anchoredPosition = new Vector2(6f, -6f);
+            var heartBtn = heartGo.AddComponent<Button>();
+            heartBtn.targetGraphic = heartImg;
+            heartBtn.transition = Selectable.Transition.None;
+            var heartHover = heartGo.AddComponent<TileHover>();
+            heartHover.Target = heartImg;
+
             return tileGo;
+        }
+
+        private const float HeartSize = 26f;
+
+        private void BindHeart(GameObject tileGo, int row)
+        {
+            var heart = tileGo.transform.Find("Heart");
+            if (heart == null) return;
+            var btn = heart.GetComponent<Button>();
+            btn.onClick.RemoveAllListeners();
+            btn.onClick.AddListener(() => ToggleFavorite(row));
+            ApplyHeart(heart, _tileFav[row], row == _hoveredRow);
+        }
+
+        // an empty heart only shows on the tile under the mouse
+        private void OnTileHovered(int row, bool over)
+        {
+            if (over) _hoveredRow = row;
+            else if (_hoveredRow == row) _hoveredRow = -1;
+            if (row >= _tiles.Count || row >= _tileFav.Count) return;
+            var heart = _tiles[row].transform.Find("Heart");
+            if (heart != null) ApplyHeart(heart, _tileFav[row], over);
+        }
+
+        private static void ApplyHeart(Transform heart, bool fav, bool hovered)
+        {
+            var img = heart.GetComponent<Image>();
+            if (img != null)
+            {
+                img.sprite = fav ? ModChrome.HeartFilledSprite() : ModChrome.HeartSprite();
+                img.enabled = fav || hovered;
+            }
+            var hv = heart.GetComponent<TileHover>();
+            if (hv == null) return;
+            var c = fav ? ModChrome.HeartColor : Color.white;
+            hv.Normal = fav ? c : new Color(1f, 1f, 1f, 0.55f);
+            hv.Hover = fav ? Color.Lerp(c, Color.white, 0.25f) : Color.white;
+            hv.Press = fav ? Color.Lerp(c, Color.black, 0.2f) : ModChrome.HeartColor;
+            hv.Apply();
+        }
+
+        private void ToggleFavorite(int row)
+        {
+            if (row < 0 || row >= _tileFav.Count || row >= _tiles.Count) return;
+            bool fav = Favorites.Toggle(_tileFavKey[row]);
+            _tileFav[row] = fav;
+            var heart = _tiles[row].transform.Find("Heart");
+            if (heart != null) ApplyHeart(heart, fav, row == _hoveredRow);
+            RebuildOrder();
+            if (!fav && _filterState[FilterKey.Favorites]) _tiles[row].SetActive(false);
+            // drawn above the tiles it slides across
+            if (fav) _tiles[row].transform.SetAsLastSibling();
+            ShiftTiles();
+        }
+
+        // rows are already alphabetical, so a stable partition keeps both groups sorted
+        private void RebuildOrder()
+        {
+            _order.Clear();
+            for (int i = 0; i < _tileFav.Count; i++) if (_tileFav[i]) _order.Add(i);
+            for (int i = 0; i < _tileFav.Count; i++) if (!_tileFav[i]) _order.Add(i);
         }
 
         private enum IndicatorKind { None, Error, Warn }
@@ -1792,8 +1960,9 @@ namespace ItemSpawnerPlus
             {
                 bool classOk = i >= _tileClass.Count || ClassAllowed(_tileClass[i]);
                 bool catOk = i >= _tileCategory.Count || CategoryAllowed(_tileCategory[i]);
+                bool favOk = !_filterState[FilterKey.Favorites] || (i < _tileFav.Count && _tileFav[i]);
                 bool textOk = q.Length == 0 || (i < _tileSearchNames.Count && _tileSearchNames[i].IndexOf(q, StringComparison.Ordinal) >= 0);
-                bool match = classOk && catOk && textOk;
+                bool match = classOk && catOk && favOk && textOk;
                 if (_tiles[i].activeSelf != match) _tiles[i].SetActive(match);
                 if (match) shown++;
             }

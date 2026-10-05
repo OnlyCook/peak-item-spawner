@@ -281,6 +281,51 @@ namespace ItemSpawnerPlus
             return Sprite.Create(tex, new Rect(0, 0, s, s), new Vector2(0.5f, 0.5f), 100f);
         }
 
+        private static Sprite _heartSprite, _heartFilledSprite;
+        internal static readonly Color HeartColor = new Color(0.95f, 0.26f, 0.36f);
+
+        // outline is a white ring tinted per state, filled has a dark rim so it reads on any tile colour
+        internal static Sprite HeartSprite() => _heartSprite ??= BakeHeart(false);
+        internal static Sprite HeartFilledSprite() => _heartFilledSprite ??= BakeHeart(true);
+
+        private static Sprite BakeHeart(bool filled)
+        {
+            const int s = 48;
+            const float pad = 2.5f;
+            var tex = new Texture2D(s, s, TextureFormat.ARGB32, false)
+            { wrapMode = TextureWrapMode.Clamp, filterMode = FilterMode.Bilinear };
+            var px = new Color32[s * s];
+            // diamond (half-diagonal h) plus two circles on its upper sides
+            float h = (s - 2f * pad) / (1f + 2f * 0.70711f);
+            float cx = s * 0.5f, cy = s * 0.5f - 0.10355f * h;
+            float half = h * 0.70711f;
+            var c1 = new Vector2(cx - h * 0.5f, cy + h * 0.5f);
+            var c2 = new Vector2(cx + h * 0.5f, cy + h * 0.5f);
+            float ring = filled ? 3f : 3.5f;
+            var rim = new Color(0.09f, 0.08f, 0.04f);
+            for (int y = 0; y < s; y++)
+            {
+                for (int x = 0; x < s; x++)
+                {
+                    var p = new Vector2(x + 0.5f, y + 0.5f);
+                    float rx = ((p.x - cx) + (p.y - cy)) * 0.70711f;
+                    float ry = ((p.y - cy) - (p.x - cx)) * 0.70711f;
+                    float qx = Mathf.Abs(rx) - half, qy = Mathf.Abs(ry) - half;
+                    float box = new Vector2(Mathf.Max(qx, 0f), Mathf.Max(qy, 0f)).magnitude + Mathf.Min(Mathf.Max(qx, qy), 0f);
+                    float d = Mathf.Min(box, Mathf.Min((p - c1).magnitude - half, (p - c2).magnitude - half));
+                    float shape = Mathf.Clamp01(0.5f - d);
+                    float inner = Mathf.Clamp01(0.5f - (d + ring));
+                    Color c = filled
+                        ? new Color(Mathf.Lerp(rim.r, 1f, inner), Mathf.Lerp(rim.g, 1f, inner), Mathf.Lerp(rim.b, 1f, inner), shape)
+                        : new Color(1f, 1f, 1f, shape * (1f - inner));
+                    px[y * s + x] = c;
+                }
+            }
+            tex.SetPixels32(px);
+            tex.Apply();
+            return Sprite.Create(tex, new Rect(0, 0, s, s), new Vector2(0.5f, 0.5f), 100f);
+        }
+
         private static float SegDist(Vector2 p, Vector2 a, Vector2 b)
         {
             Vector2 pa = p - a, ba = b - a;

@@ -14,17 +14,18 @@ namespace ItemSpawnerPlus
         internal Color Normal;
         internal Color Hover;
         internal Color Press;
+        internal System.Action<bool> Hovered;
 
         private bool _over;
         private bool _down;
 
-        public void OnPointerEnter(PointerEventData e) { _over = true; Apply(); }
-        public void OnPointerExit(PointerEventData e) { _over = false; _down = false; Apply(); }
+        public void OnPointerEnter(PointerEventData e) { _over = true; Apply(); Hovered?.Invoke(true); }
+        public void OnPointerExit(PointerEventData e) { _over = false; _down = false; Apply(); Hovered?.Invoke(false); }
         public void OnPointerDown(PointerEventData e) { _down = true; Apply(); }
         public void OnPointerUp(PointerEventData e) { _down = false; Apply(); }
 
         // a search that hides the tile mid-hover never sends OnPointerExit
-        private void OnDisable() { _over = false; _down = false; Apply(); }
+        private void OnDisable() { _over = false; _down = false; Apply(); Hovered?.Invoke(false); }
 
         internal void Apply()
         {

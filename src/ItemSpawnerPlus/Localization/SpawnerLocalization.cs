@@ -18,6 +18,7 @@ namespace ItemSpawnerPlus
         FilterFood,
         FilterEquipment,
         FilterCreatures,
+        FilterFavorites,
         CreatureBees,
         CreatureBeetle,
         CreatureBigGhost,
@@ -133,6 +134,11 @@ namespace ItemSpawnerPlus
             {
                 "Creatures", "Créatures", "Creature", "Kreaturen", "Criaturas", "Criaturas", "Criaturas",
                 "Существа", "Істоти", "生物", "生物", "クリーチャー", "생물", "Stwory", "Yaratıklar",
+            },
+            [SpawnerText.FilterFavorites] = new[]
+            {
+                "Favorites only", "Favoris uniquement", "Solo preferiti", "Nur Favoriten", "Solo favoritos", "Solo favoritos", "Só favoritos",
+                "Только избранное", "Лише улюблені", "仅收藏", "僅收藏", "お気に入りのみ", "즐겨찾기만", "Tylko ulubione", "Yalnızca favoriler",
             },
             [SpawnerText.CreatureBees] = new[]
             {
